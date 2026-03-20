@@ -1,6 +1,3 @@
-# Large model files
-*.pkl
-
 # Python
 __pycache__/
 *.py[cod]
