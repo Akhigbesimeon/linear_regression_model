@@ -1,11 +1,12 @@
 """
 FastAPI application for Student GPA prediction and model retraining.
+Optimized for low-memory environments.
 """
 import os
 from typing import List
 
 import joblib
-import pandas as pd
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -25,15 +26,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_PATH = "../linear_regression/best_gpa_model.pkl"
-SCALER_PATH = "../linear_regression/gpa_scaler.pkl"
+MODEL_PATH = "best_model.pkl"
+SCALER_PATH = "scaler.pkl"
 
-# Load models if they exist (prevents crash on startup if missing)
+# Load models if they exist
 MODEL = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 SCALER = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
 
 
-# Pydantic Models for Input Validation
 class PredictionInput(BaseModel):
     """Schema for individual student data used in prediction."""
     study_hours: float = Field(..., ge=0.0, le=24.0, description="Hours studied per week")
@@ -58,7 +58,6 @@ class RetrainRequest(BaseModel):
     )
 
 
-# API Endpoints
 @app.post("/predict", summary="Predict Student GPA")
 def predict_gpa(input_data: PredictionInput):
     """Takes student habits and returns a predicted GPA."""
@@ -68,12 +67,17 @@ def predict_gpa(input_data: PredictionInput):
         )
 
     try:
-        df = pd.DataFrame([input_data.model_dump()])
+        # Extract data into a 2D numpy array instead of a pandas DataFrame
+        # IMPORTANT: The order must match how the model was originally trained
+        features = np.array([[
+            input_data.study_hours,
+            input_data.sleep_hours,
+            input_data.attendance_rate,
+            input_data.extracurriculars
+        ]])
 
-        x_scaled = SCALER.transform(df)
-
+        x_scaled = SCALER.transform(features)
         prediction = MODEL.predict(x_scaled)[0]
-
         final_gpa = max(0.0, min(4.0, float(prediction)))
 
         return {"predicted_gpa": round(final_gpa, 2)}
@@ -92,21 +96,22 @@ def retrain_model(request: RetrainRequest):
 
     try:
         raw_data = [item.model_dump() for item in request.data]
-        df = pd.DataFrame(raw_data)
+        
+        # Build 2D numpy array for features and 1D array for target
+        x_new = np.array([
+            [d['study_hours'], d['sleep_hours'], d['attendance_rate'], d['extracurriculars']]
+            for d in raw_data
+        ])
+        y_new = np.array([d['gpa'] for d in raw_data])
 
-        x_new = df[['study_hours', 'sleep_hours', 'attendance_rate', 'extracurriculars']]
-        y_new = df['gpa']
-
-        # Scale the new features and fit the model
         x_new_scaled = SCALER.transform(x_new)
         MODEL.fit(x_new_scaled, y_new)
 
-        # Save the newly trained model to disk
         joblib.dump(MODEL, MODEL_PATH)
 
         return {
             "status": "success",
-            "message": f"Model successfully retrained on {len(df)} new records."
+            "message": f"Model successfully retrained on {len(raw_data)} new records."
         }
 
     except Exception as e:
