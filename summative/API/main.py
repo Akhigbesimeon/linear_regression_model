@@ -32,7 +32,7 @@ FEATURES_PATH = os.path.join(BASE_DIR, "../linear_regression/gpa_feature_columns
 
 MODEL = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 SCALER = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
-FEATURE_COLUMNS = joblib.load(FEATURES_PATH) if os.path.exists(FEATURES_PATH) else []
+FEATURE_COLUMNS = list(joblib.load(FEATURES_PATH)) if os.path.exists(FEATURES_PATH) else []
 
 
 @app.get("/", include_in_schema=False)
@@ -62,7 +62,8 @@ class RetrainRequest(BaseModel):
 @app.post("/predict", summary="Predict Student GPA")
 def predict_gpa(input_data: PredictionInput):
     """Takes 4 student habits, pads missing features, and returns a predicted 4.0 GPA."""
-    if not MODEL or not SCALER or not FEATURE_COLUMNS:
+    # [+] FIX: Safer checking logic
+    if MODEL is None or SCALER is None or len(FEATURE_COLUMNS) == 0:
         raise HTTPException(
             status_code=503, detail="Server artifacts not fully loaded. Check file paths."
         )
@@ -79,7 +80,6 @@ def predict_gpa(input_data: PredictionInput):
         x_scaled = SCALER.transform(input_df)
         raw_prediction = MODEL.predict(x_scaled)[0]
 
-        # Scale the native 2.01 max dataset to a standard 4.0 scale
         scaled_prediction = float(raw_prediction) * (4.0 / 2.01)
         final_gpa = max(0.0, min(4.0, scaled_prediction))
 
@@ -92,7 +92,7 @@ def predict_gpa(input_data: PredictionInput):
 @app.post("/retrain", summary="Retrain the Model")
 def retrain_model(request: RetrainRequest):
     """Retrains the model using a new batch of uploaded 4.0 scaled data."""
-    if not MODEL or not SCALER or not FEATURE_COLUMNS:
+    if MODEL is None or SCALER is None or len(FEATURE_COLUMNS) == 0:
         raise HTTPException(status_code=503, detail="Artifacts missing. Cannot retrain.")
 
     try:
@@ -105,7 +105,6 @@ def retrain_model(request: RetrainRequest):
 
         x_new = df[FEATURE_COLUMNS]
 
-        # Reverse-scale the 4.0 user input back down to the model's native 2.01 scale
         y_new = df['gpa'] * (2.01 / 4.0)
 
         x_new_scaled = SCALER.transform(x_new)
