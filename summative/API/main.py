@@ -1,6 +1,5 @@
 """
 FastAPI application for Student GPA prediction.
-Restricted to 4 core input parameters with the million-multiplier fix.
 """
 import os
 from typing import List
@@ -43,6 +42,7 @@ def redirect_to_docs():
 
 
 class PredictionInput(BaseModel):
+    """Schema mapping 4 core habits for prediction."""
     study_hours: float = Field(..., ge=0.0)
     screen_time: float = Field(..., ge=0.0)
     concentration: float = Field(..., ge=0.0)
@@ -50,15 +50,18 @@ class PredictionInput(BaseModel):
 
 
 class RetrainInput(PredictionInput):
+    """Schema for training data, adding the target GPA."""
     gpa: float = Field(..., ge=0.0, le=4.0)
 
 
 class RetrainRequest(BaseModel):
+    """Schema for a batch of retraining data."""
     data: List[RetrainInput] = Field(..., min_length=10)
 
 
 @app.post("/predict", summary="Predict Student GPA")
 def predict_gpa(input_data: PredictionInput):
+    """Predicts a student's GPA based on their habits."""
     if MODEL is None or SCALER is None or len(FEATURE_COLUMNS) == 0:
         raise HTTPException(
             status_code=503, detail="Server artifacts not fully loaded. Check file paths."
@@ -74,16 +77,9 @@ def predict_gpa(input_data: PredictionInput):
         input_df = input_df[FEATURE_COLUMNS]
 
         x_scaled = SCALER.transform(input_df)
-        raw_prediction = MODEL.predict(x_scaled)[0]
+        raw_prediction = float(MODEL.predict(x_scaled)[0])
 
-        base_gpa = float(raw_prediction) / 1_000_000.0
-
-        # Scale the native 2.01 max dataset to a standard 4.0 scale
-        scaled_prediction = base_gpa * (4.0 / 2.01)
-        final_gpa = max(0.0, min(4.0, scaled_prediction))
-
-        # Explicitly round and cast to float
-        return {"predicted_gpa": float(round(final_gpa, 2))}
+        return {"predicted_gpa": float(round(raw_prediction, 2))}
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}") from e
@@ -91,6 +87,7 @@ def predict_gpa(input_data: PredictionInput):
 
 @app.post("/retrain", summary="Retrain the Model")
 def retrain_model(request: RetrainRequest):
+    """Retrains the model with a new batch of data."""
     if MODEL is None or SCALER is None or len(FEATURE_COLUMNS) == 0:
         raise HTTPException(status_code=503, detail="Artifacts missing. Cannot retrain.")
 
@@ -103,11 +100,7 @@ def retrain_model(request: RetrainRequest):
                 df[col] = 0
 
         x_new = df[FEATURE_COLUMNS]
-
-        # Reverse-scale the 4.0 user input back down to 2.01, AND multiply by 1,000,000
-        # so it matches the format the original model weights were trained on
-        y_new = (df['gpa'] * (2.01 / 4.0)) * 1_000_000.0
-
+        y_new = df['gpa']
         x_new_scaled = SCALER.transform(x_new)
         MODEL.fit(x_new_scaled, y_new)
         joblib.dump(MODEL, MODEL_PATH)
