@@ -1,14 +1,15 @@
 """
-FastAPI application for Student GPA prediction and model retraining.
-Optimized for low-memory environments.
+FastAPI application for Student GPA prediction.
+Includes online_courses_completed and scales a 2.0 dataset to a 4.0 output.
 """
 import os
 from typing import List
 
 import joblib
-import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 app = FastAPI(
@@ -17,7 +18,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,59 +26,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_PATH = "../linear_regression/best_gpa_model.pkl"
-SCALER_PATH = "../linear_regression/gpa_scaler.pkl"
+# [i] Paths to your generated artifacts
+MODEL_PATH = "best_gpa_model.pkl"
+SCALER_PATH = "gpa_scaler.pkl"
+FEATURES_PATH = "gpa_feature_columns.pkl"
 
-# Load models if they exist
+# [+] Fallback to an empty list for FEATURE_COLUMNS to satisfy Pylint iteration checks
 MODEL = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
 SCALER = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
+FEATURE_COLUMNS = joblib.load(FEATURES_PATH) if os.path.exists(FEATURES_PATH) else []
+
+
+@app.get("/", include_in_schema=False)
+def redirect_to_docs():
+    """Automatically redirects the base URL to the Swagger UI."""
+    return RedirectResponse(url="/docs")
 
 
 class PredictionInput(BaseModel):
-    """Schema for individual student data used in prediction."""
-    study_hours: float = Field(..., ge=0.0, le=24.0, description="Hours studied per week")
-    sleep_hours: float = Field(..., ge=0.0, le=24.0, description="Hours slept per night")
-    attendance_rate: float = Field(
-        ..., ge=0.0, le=100.0, description="Class attendance percentage"
-    )
-    extracurriculars: int = Field(
-        ..., ge=0, le=20, description="Number of extracurricular activities"
-    )
+    """Schema matching your exact dataset features."""
+    study_hours: float = Field(..., ge=0.0)
+    screen_time: float = Field(..., ge=0.0)
+    concentration: float = Field(..., ge=0.0)
+    procrastination_score: float = Field(..., ge=0.0)
+    backlogs: int = Field(default=0, ge=0)
+    part_time_hours: float = Field(default=0.0, ge=0.0)
+    online_courses_completed: int = Field(default=0, ge=0)
 
 
 class RetrainInput(PredictionInput):
     """Schema for training data, including the target GPA."""
-    gpa: float = Field(..., ge=0.0, le=4.0, description="Actual Student GPA")
+    gpa: float = Field(..., ge=0.0, le=4.0)
 
 
 class RetrainRequest(BaseModel):
     """Schema for a batch of retraining data."""
-    data: List[RetrainInput] = Field(
-        ..., min_length=10, description="Batch of new data for retraining"
-    )
+    data: List[RetrainInput] = Field(..., min_length=10)
 
 
 @app.post("/predict", summary="Predict Student GPA")
 def predict_gpa(input_data: PredictionInput):
-    """Takes student habits and returns a predicted GPA."""
-    if MODEL is None or SCALER is None:
+    """Takes student habits, maps to 16 features, and returns a predicted 4.0 GPA."""
+    if not MODEL or not SCALER or not FEATURE_COLUMNS:
         raise HTTPException(
-            status_code=503, detail="Model or scaler not loaded on the server."
+            status_code=503, detail="Server artifacts not fully loaded."
         )
 
     try:
-        # Extract data into a 2D numpy array instead of a pandas DataFrame
-        # IMPORTANT: The order must match how the model was originally trained
-        features = np.array([[
-            input_data.study_hours,
-            input_data.sleep_hours,
-            input_data.attendance_rate,
-            input_data.extracurriculars
-        ]])
+        input_df = pd.DataFrame([input_data.model_dump()])
 
-        x_scaled = SCALER.transform(features)
-        prediction = MODEL.predict(x_scaled)[0]
-        final_gpa = max(0.0, min(4.0, float(prediction)))
+        for col in FEATURE_COLUMNS:
+            if col not in input_df.columns:
+                input_df[col] = 0
+
+        input_df = input_df[FEATURE_COLUMNS]
+
+        x_scaled = SCALER.transform(input_df)
+        raw_prediction = MODEL.predict(x_scaled)[0]
+
+        # [*] Scale the 2.01 max dataset to a 4.0 scale
+        scaled_prediction = float(raw_prediction) * (4.0 / 2.01)
+        final_gpa = max(0.0, min(4.0, scaled_prediction))
 
         return {"predicted_gpa": round(final_gpa, 2)}
 
@@ -88,30 +96,30 @@ def predict_gpa(input_data: PredictionInput):
 
 @app.post("/retrain", summary="Retrain the Model")
 def retrain_model(request: RetrainRequest):
-    """Retrains the model using a new batch of uploaded data."""
-    if MODEL is None or SCALER is None:
-        raise HTTPException(
-            status_code=503, detail="Base model not found. Cannot retrain."
-        )
+    """Retrains the model using a new batch of uploaded 4.0 scaled data."""
+    if not MODEL or not SCALER or not FEATURE_COLUMNS:
+        raise HTTPException(status_code=503, detail="Artifacts missing. Cannot retrain.")
 
     try:
         raw_data = [item.model_dump() for item in request.data]
-        
-        # Build 2D numpy array for features and 1D array for target
-        x_new = np.array([
-            [d['study_hours'], d['sleep_hours'], d['attendance_rate'], d['extracurriculars']]
-            for d in raw_data
-        ])
-        y_new = np.array([d['gpa'] for d in raw_data])
+        df = pd.DataFrame(raw_data)
+
+        for col in FEATURE_COLUMNS:
+            if col not in df.columns and col != 'gpa':
+                df[col] = 0
+
+        x_new = df[FEATURE_COLUMNS]
+
+        # Reverse-scale the 4.0 user input back down to the model's native 2.01 scale
+        y_new = df['gpa'] * (2.01 / 4.0)
 
         x_new_scaled = SCALER.transform(x_new)
         MODEL.fit(x_new_scaled, y_new)
-
         joblib.dump(MODEL, MODEL_PATH)
 
         return {
             "status": "success",
-            "message": f"Model successfully retrained on {len(raw_data)} new records."
+            "message": f"Retrained on {len(df)} records."
         }
 
     except Exception as e:
