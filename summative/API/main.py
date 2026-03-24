@@ -26,8 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_PATH = "best_model.pkl"
-SCALER_PATH = "scaler.pkl"
+MODEL_PATH = "../linear_regression/best_gpa_model.pkl"
+SCALER_PATH = "../linear_regression/gpa_scaler.pkl"
 
 # Load models if they exist
 MODEL = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
