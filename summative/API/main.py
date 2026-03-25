@@ -42,16 +42,18 @@ def redirect_to_docs():
 
 
 class PredictionInput(BaseModel):
-    """Schema mapping 4 core habits for prediction."""
-    study_hours: float = Field(..., ge=0.0)
-    screen_time: float = Field(..., ge=0.0)
-    concentration: float = Field(..., ge=0.0)
-    procrastination_score: float = Field(..., ge=0.0)
+    """6 core student habit features used for GPA prediction."""
+    study_hours: float = Field(..., ge=0.0, le=12.0, example=5.0, description="Hours studied per day (0-12)")
+    screen_time: float = Field(..., ge=0.0, le=20.0, example=6.0, description="Total screen time in hours (0-20)")
+    concentration: float = Field(..., ge=1.0, le=10.0, example=7.0, description="Concentration score (1-10)")
+    procrastination_score: float = Field(..., ge=1.0, le=10.0, example=4.0, description="Procrastination score (1-10, lower is better)")
+    backlogs: int = Field(..., ge=0, le=10, example=1, description="Number of failed/pending subjects (0-10)")
+    part_time_hours: float = Field(..., ge=0.0, le=11.0, example=3.0, description="Hours worked part-time per week (0-11)")
 
 
 class RetrainInput(PredictionInput):
     """Schema for training data, adding the target GPA."""
-    gpa: float = Field(..., ge=0.0, le=4.0)
+    gpa: float = Field(..., ge=0.0, le=4.0, description="Actual GPA on 0-4 scale")
 
 
 class RetrainRequest(BaseModel):
@@ -79,7 +81,8 @@ def predict_gpa(input_data: PredictionInput):
         x_scaled = SCALER.transform(input_df)
         raw_prediction = float(MODEL.predict(x_scaled)[0])
 
-        return {"predicted_gpa": float(round(raw_prediction, 2))}
+        predicted_gpa = round(max(0.0, min(4.0, raw_prediction)), 2)
+        return {"predicted_gpa": predicted_gpa}
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}") from e
